@@ -13,14 +13,14 @@ const {
 
 async function main() {
   const preps = await getPReps();
-  // const onlyMainPreps = preps.preps.filter(p => p.grade === "0x0");
-  const onlyMainPreps = preps.preps;
+  const onlyMainPreps = preps.preps.filter(p => p.grade === "0x0");
+  // const onlyMainPreps = preps.preps;
   const prepsSorted = {
     withPubKey: [],
     withoutPubKey: []
   };
-  const maxPreps = 4;
-  // const maxPreps = null;
+  // const maxPreps = 4;
+  const maxPreps = null;
   let count = 0;
   for (const w of onlyMainPreps) {
     const address = w.address;
