@@ -1,54 +1,88 @@
 const {
   getPReps,
   WALLET,
-  WALLET_2,
   getPublicKey,
   getPRepNodePublicKey,
   sliceAddress,
   registerPRepNodePublicKey,
+  registerPRepNodePublicKey2,
   getTxResult,
-  sleep
-} = require("./lib");
+  sleep,
+  recoverPubKeyByAddress
+} = require("./utils/lib");
 
 async function main() {
   const preps = await getPReps();
-  console.log("> preps: ", preps);
-  const wallet = [WALLET, WALLET_2];
-  for (const w of wallet) {
-    console.log("\n>--------------------------------");
-    const publicKey = getPublicKey(w);
-    const slicedPublicKey = sliceAddress(publicKey);
-    const address = w.getAddress();
+  // const onlyMainPreps = preps.preps.filter(p => p.grade === "0x0");
+  const onlyMainPreps = preps.preps;
+  const prepsSorted = {
+    withPubKey: [],
+    withoutPubKey: []
+  };
+  const maxPreps = 4;
+  // const maxPreps = null;
+  let count = 0;
+  for (const w of onlyMainPreps) {
+    const address = w.address;
     const slicedAddress = sliceAddress(address);
-    console.log(`> Public key of wallet ${slicedAddress}: ${slicedPublicKey}`);
     const prepNodePublicKey = await getPRepNodePublicKey(address);
-    const slicedPrepNodePublicKey = sliceAddress(prepNodePublicKey);
-    console.log(
-      `> PRep node public key of wallet ${slicedAddress}: ${slicedPrepNodePublicKey}`
-    );
+    const recoveredPubKey = await recoverPubKeyByAddress(address);
+    if (prepNodePublicKey) {
+      prepsSorted.withPubKey.push({
+        prep: w,
+        pubKey: prepNodePublicKey,
+        recoveredPubKey: recoveredPubKey
+      });
+    } else {
+      prepsSorted.withoutPubKey.push({
+        prep: w,
+        pubKey: prepNodePublicKey,
+        recoveredPubKey: recoveredPubKey
+      });
+      count += 1;
+    }
+    if (maxPreps && count >= maxPreps) {
+      break;
+    }
+  }
 
-    // if prep doesnt have a registered prep node public key
-    if (prepNodePublicKey == null) {
-      console.log(
-        `Prep ${slicedAddress} doesnt have a registered Prep node Public Key. Registering...`
-      );
+  console.log("\n>--------------------------------");
+  console.log("> Preps with registered PubKey: ");
+  prepsSorted.withPubKey.forEach(p => {
+    console.log(
+      `Prep: ${p.prep.name}.\nPrep address: ${p.prep.address}.\nPubKey: ${p.pubKey}.\nRecovered PubKey: ${p.recoveredPubKey}.\n###`
+    );
+  });
+  console.log("\n>--------------------------------");
+  console.log("> Preps without registered PubKey: ");
+  prepsSorted.withoutPubKey.forEach(p => {
+    console.log(
+      `Prep: ${p.prep.name}.\nPrep address: ${p.prep.address}.\nPubKey: ${p.pubKey}.\nRecovered PubKey: ${p.recoveredPubKey}.\n###`
+    );
+  });
+
+  const RUN_REGISTRATION = false;
+  if (RUN_REGISTRATION) {
+    for (const v of prepsSorted.withoutPubKey) {
       // register prep node public key
-      const txHash = await registerPRepNodePublicKey(w);
+      const pubKey = "0x" + v.recoveredPubKey;
+      const address = v.prep.address;
+      const txHash = await registerPRepNodePublicKey2(pubKey, address);
       // print tx hash
       console.log(`> TxHash: ${txHash}`);
       // wait for tx result
       const txResult = await getTxResult(txHash);
       console.log(`> TxResult:`);
       console.log(txResult);
-
-      // wait for new block
-      await sleep(3000);
-
-      // getting all prep info
-      const preps = await getPReps();
-      // print all updated prep info
-      console.log("> preps: ", preps);
     }
+
+    // wait for new block
+    await sleep(3000);
+
+    // getting all prep info
+    const request = await getPReps();
+    // print all updated prep info
+    console.log("> preps: ", request);
   }
 }
 
