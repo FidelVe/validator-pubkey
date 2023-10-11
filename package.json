@@ -13,10 +13,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@ethereumjs/rlp": "^5.0.0",
     "base64-js": "^1.5.1",
     "dotenv": "^16.3.1",
     "elliptic": "^6.5.4",
-    "icon-sdk-js": "^1.5.1"
+    "icon-sdk-js": "^1.5.1",
+    "js-sha3": "^0.9.2"
   },
   "devDependencies": {
     "eslint": "^8.47.0"

@@ -5,6 +5,18 @@ const { ec } = elliptic;
 const ecdsa = new ec("secp256k1");
 const base64 = require("base64-js");
 const config = require("./config");
+const fs = require("fs");
+const {
+  decodeBytes,
+  intFromUint8Array,
+  bytesToBigInt,
+  BLOCK,
+  VOTES,
+  VOTEITEM,
+  uint8ArrayToHex,
+  encode
+} = require("./rlp2");
+const sha3_256 = require("js-sha3").sha3_256;
 
 const {
   IconBuilder,
@@ -55,6 +67,7 @@ async function registerPRepNodePublicKey(wallet, address) {
 
 async function registerPRepNodePublicKey2(pubKey, address) {
   try {
+    console.log(WALLET.getAddress());
     const params = {
       params: {
         pubKey: pubKey,
@@ -173,6 +186,51 @@ async function callMethod(method, to, params) {
   }
 }
 
+async function getLastBlock() {
+  try {
+    return await ICON_SERVICE.getLastBlock().execute();
+  } catch (e) {
+    console.log("Error getting last block", e);
+    throw new Error("Error getting last block");
+  }
+}
+
+async function getBlockByHeight(height) {
+  try {
+    return await ICON_SERVICE.getBlockByHeight(height).execute();
+  } catch (e) {
+    console.log("Error getting block by height", e);
+    throw new Error("Error getting block by height");
+  }
+}
+
+async function getDataByHash(hash) {
+  try {
+    return await ICON_SERVICE.getDataByHash(hash).execute();
+  } catch (e) {
+    console.log("Error getting data by hash", e);
+    throw new Error("Error getting data by hash");
+  }
+}
+
+async function getVotesByHeight(height) {
+  try {
+    return await ICON_SERVICE.getVotesByHeight(height).execute();
+  } catch (e) {
+    console.log("Error getting vote by height", e);
+    throw new Error("Error getting votes by height");
+  }
+}
+
+async function getBlockHeaderByHeight(height) {
+  try {
+    return await ICON_SERVICE.getBlockHeaderByHeight(height).execute();
+  } catch (e) {
+    console.log("Error getting block header by Height", e);
+    throw new Error("Error getting block header by height");
+  }
+}
+
 function sliceAddress(address) {
   try {
     return address.slice(0, 5) + "..." + address.slice(-5);
@@ -201,7 +259,7 @@ function getRandomPrivateKey() {
   return getRandomHex(64);
 }
 
-function recoverPubKey(sign, hash) {
+function recoverPubKey(sign, hash, compressed = true) {
   const signatureBuffer = Buffer.from(base64.toByteArray(sign));
   const signatureHex = signatureBuffer.toString("hex");
   const signatureHexWithPrefix = "0x" + signatureHex;
@@ -217,7 +275,7 @@ function recoverPubKey(sign, hash) {
     signature,
     signature.v
   );
-  const recoveredPubKeyHex = recoveredPubKey.encode("hex", true);
+  const recoveredPubKeyHex = recoveredPubKey.encode("hex", compressed);
 
   return recoveredPubKeyHex;
 }
@@ -251,6 +309,103 @@ async function recoverPubKeyByAddress(address) {
   return pubKey;
 }
 
+async function checkVotes(height) {
+  try {
+    if (typeof height !== "string") {
+      throw new Error("height must be a hex string");
+    } else if (!height.startsWith("0x")) {
+      throw new Error("height must be a hex string");
+    }
+
+    let useHeight = height;
+    let lastBlock = await getLastBlock();
+    let votes = null;
+    if (useHeight == null) {
+      useHeight = lastBlock.height.toString("hex");
+    }
+
+    const blockHeader = await getBlockHeaderByHeight(useHeight);
+    const headerAsBuffer = Buffer.from(blockHeader, "base64");
+    const headerAsUint8Array = Uint8Array.from(headerAsBuffer);
+    const headerDecoded = decodeBytes(headerAsUint8Array);
+    const hashedHeader = "0x" + sha3_256(headerAsUint8Array);
+
+    if (parseInt(useHeight) < parseInt(lastBlock.height)) {
+      const nextBlockHeader = await getBlockHeaderByHeight(
+        parseInt(useHeight) + 1
+      );
+      const nextHeaderAsBuffer = Buffer.from(nextBlockHeader, "base64");
+      const nextHeaderAsUint8Array = Uint8Array.from(nextHeaderAsBuffer);
+      const nextHeaderDecoded = decodeBytes(nextHeaderAsUint8Array);
+      const voteAsBytes = nextHeaderDecoded[BLOCK.VOTES_HASH];
+      const voteHash = uint8ArrayToHex(voteAsBytes);
+      votes = await getDataByHash(voteHash);
+    } else {
+      votes = await getVotesByHeight(useHeight);
+    }
+
+    const voteAsBuffer = Buffer.from(votes, "base64");
+    const voteAsUint8Array = Uint8Array.from(voteAsBuffer);
+    const voteDecoded = decodeBytes(voteAsUint8Array);
+
+    const votedResults = [];
+    for (const voteItem of voteDecoded[VOTES.ITEMS]) {
+      const sig = voteItem[VOTEITEM.SIGNATURE];
+      const sigAsBuffer = Buffer.from(sig);
+      const sigAsB64 = sigAsBuffer.toString("base64");
+
+      const FOO = Uint8Array.from(["0x01"]);
+      const voteMsg = encode([
+        headerDecoded[BLOCK.HEIGHT],
+        voteDecoded[VOTES.ROUND],
+        FOO,
+        hashedHeader,
+        voteDecoded[VOTES.PARTSET_ID],
+        voteItem[VOTEITEM.TIMESTAMP]
+      ]);
+      const voteHash = "0x" + sha3_256(voteMsg);
+      const pubKey = recoverPubKey(sigAsB64, voteHash.substring(2));
+      const pubKeyUncompressed = recoverPubKey(
+        sigAsB64,
+        voteHash.substring(2),
+        false
+      ).slice(2);
+      const pubKeyAsBuffer = hexKeyToBuffer(pubKeyUncompressed);
+      const address = "hx" + sha3_256(pubKeyAsBuffer).slice(-40);
+      votedResults.push([address, pubKey]);
+    }
+    return votedResults;
+  } catch (e) {
+    console.log("error checking votes");
+    console.log(e.message);
+    return null;
+  }
+}
+
+function hexKeyToBuffer(key) {
+  let keyAsBuffer = null;
+
+  try {
+    keyAsBuffer = Buffer.from(key, "hex");
+  } catch (err) {
+    console.log("Unexpected error parsing private key into buffer");
+    console.log(err);
+  }
+
+  return keyAsBuffer;
+}
+
+function saveLog(data, logPath) {
+  try {
+    const oldData = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+    oldData.push(data);
+    fs.writeFileSync(logPath, JSON.stringify(oldData));
+  } catch (e) {
+    console.log("error saving log");
+    console.log(e);
+  }
+}
+
 module.exports = {
   getPReps,
   getPRep,
@@ -267,5 +422,10 @@ module.exports = {
   recoverPubKey,
   fetchTxByAddress,
   recoverPubKeyByAddress,
-  registerPRepNodePublicKey2
+  registerPRepNodePublicKey2,
+  getLastBlock,
+  getBlockByHeight,
+  getBlockHeaderByHeight,
+  checkVotes,
+  saveLog
 };
